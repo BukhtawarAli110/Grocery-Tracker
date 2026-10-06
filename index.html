@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Grocery Price Optimizer</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 800px; margin: 30px auto; padding: 0 16px; color: #222; }
+    h1 { font-size: 1.5rem; }
+    .card { background: #fdfdfd; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+    .checkbox-group label { display: inline-block; margin-right: 15px; margin-bottom: 8px; cursor: pointer; }
+    button { background: #0284c7; color: white; border: none; padding: 9px 18px; border-radius: 6px; cursor: pointer; font-size: 0.95rem; }
+    button:hover { background: #0369a1; }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 0.95rem; }
+    th, td { border: 1px solid #e2e8f0; padding: 8px 12px; text-align: left; }
+    th { background: #f8fafc; }
+    .badge { padding: 3px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: bold; }
+    .badge-cheapest { background: #dcfce7; color: #15803d; }
+    .badge-missing { background: #fee2e2; color: #b91c1c; }
+    .badge-available { background: #e0f2fe; color: #0369a1; }
+    .highlight-box { background: #f0fdf4; border: 1px solid #86efac; border-radius: 6px; padding: 12px; margin-top: 12px; }
+  </style>
+</head>
+<body>
+
+  <h1>Grocery Price & Basket Optimizer</h1>
+  
+  <div class="card">
+    <h3>1. Select Items for Your Basket:</h3>
+    <div id="itemSelection" class="checkbox-group"></div>
+    <button onclick="calculateOptimization()">Run Price Check</button>
+  </div>
+
+  <div id="results"></div>
+
+  <script>
+    // Mock inventory dataset (with deliberate out-of-stock items)
+    const storeData = {
+      stores: ["Tesco", "Sainsbury's", "Asda"],
+      products: [
+        { id: "item_001", name: "Free Range Eggs (6pk)", prices: { "Tesco": 1.50, "Sainsbury's": 1.35, "Asda": 1.60 } },
+        { id: "item_002", name: "Wholemeal Bread (800g)", prices: { "Tesco": 1.20, "Sainsbury's": 1.25, "Asda": 1.10 } },
+        { id: "item_003", name: "Semi-Skimmed Milk (2L)", prices: { "Tesco": 1.45, "Sainsbury's": 1.50, "Asda": 1.40 } },
+        { id: "item_004", name: "Cheddar Cheese (400g)", prices: { "Tesco": 3.00, "Sainsbury's": null, "Asda": 2.80 } }, // Out of stock at Sainsbury's
+        { id: "item_005", name: "Bananas (1kg)", prices: { "Tesco": 0.85, "Sainsbury's": 0.90, "Asda": null } }          // Out of stock at Asda
+      ]
+    };
+
+    // Render checkbox options
+    const container = document.getElementById("itemSelection");
+    storeData.products.forEach(p => {
+      container.innerHTML += `
+        <label>
+          <input type="checkbox" name="basketItem" value="${p.id}" checked>
+          ${p.name}
+        </label><br>
+      `;
+    });
+
+    function calculateOptimization() {
+      const selectedIds = Array.from(document.querySelectorAll('input[name="basketItem"]:checked')).map(el => el.value);
+      if (selectedIds.length === 0) {
+        alert("Please select at least one item.");
+        return;
+      }
+
+      const basketProducts = storeData.products.filter(p => selectedIds.includes(p.id));
+      
+      // 1. Calculate Single-Store Performance
+      const storeSummaries = storeData.stores.map(store => {
+        let total = 0;
+        let availableCount = 0;
+        let missingItems = [];
+
+        basketProducts.forEach(item => {
+          const price = item.prices[store];
+          if (price !== null && price !== undefined) {
+            total += price;
+            availableCount++;
+          } else {
+            missingItems.push(item.name);
+          }
+        });
+
+        return {
+          store,
+          total: parseFloat(total.toFixed(2)),
+          availableCount,
+          missingItems,
+          isComplete: missingItems.length === 0
+        };
+      });
+
+      // Filter stores that have full stock to determine cheapest single complete store
+      const completeStores = storeSummaries.filter(s => s.isComplete);
+      let cheapestSingleStore = null;
+      if (completeStores.length > 0) {
+        cheapestSingleStore = completeStores.reduce((min, s) => s.total < min.total ? s : min, completeStores[0]);
+      }
+
+      // 2. Multi-Store / Split Trip Optimization
+      let splitTotal = 0;
+      let splitItinerary = [];
+      let unpurchasableItems = [];
+
+      basketProducts.forEach(item => {
+        let bestPrice = Infinity;
+        let bestStore = null;
+
+        storeData.stores.forEach(store => {
+          const p = item.prices[store];
+          if (p !== null && p !== undefined && p < bestPrice) {
+            bestPrice = p;
+            bestStore = store;
+          }
+        });
+
+        if (bestStore) {
+          splitTotal += bestPrice;
+          splitItinerary.push({ item: item.name, store: bestStore, price: bestPrice });
+        } else {
+          unpurchasableItems.push(item.name);
+        }
+      });
+
+      // Render Outputs
+      renderResults(storeSummaries, cheapestSingleStore, splitItinerary, splitTotal, basketProducts.length);
+    }
+
+    function renderResults(storeSummaries, bestSingle, splitItinerary, splitTotal, totalSelected) {
+      const target = document.getElementById("results");
+      let html = `<div class="card"><h3>Single-Store Trip Comparison</h3>`;
+      
+      html += `<table>
+        <thead>
+          <tr>
+            <th>Supermarket</th>
+            <th>Items Found</th>
+            <th>Total Price</th>
+            <th>Missing Items</th>
+          </tr>
+        </thead>
+        <tbody>`;
+
+      storeSummaries.forEach(s => {
+        const isBest = bestSingle && s.store === bestSingle.store;
+        html += `
+          <tr>
+            <td><strong>${s.store}</strong> ${isBest ? '<span class="badge badge-cheapest">Best Single Trip</span>' : ''}</td>
+            <td>${s.availableCount} / ${totalSelected}</td>
+            <td>£${s.total.toFixed(2)}</td>
+            <td>${s.missingItems.length ? `<span class="badge badge-missing">${s.missingItems.join(', ')}</span>` : '<span class="badge badge-available">None</span>'}</td>
+          </tr>
+        `;
+      });
+      html += `</tbody></table>`;
+
+      // Split optimization card
+      html += `
+        <div class="highlight-box">
+          <h4 style="margin: 0 0 8px 0;">Optimal Split-Trip Total: £${splitTotal.toFixed(2)}</h4>
+          ${bestSingle ? `<p style="margin: 0 0 10px 0; font-size: 0.9rem;">Saves <strong>£${(bestSingle.total - splitTotal).toFixed(2)}</strong> compared to shopping entirely at${bestSingle.store}.</p>` : ''}
+          <table>
+            <thead><tr><th>Item</th><th>Buy At</th><th>Price</th></tr></thead>
+            <tbody>
+              ${splitItinerary.map(i => `<tr><td>${i.item}</td><td><strong>${i.store}</strong></td><td>£${i.price.toFixed(2)}</td></tr>`).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>`;
+
+      target.innerHTML = html;
+    }
+
+    // Run automatically on initial load
+    calculateOptimization();
+  </script>
+</body>
+</html>
